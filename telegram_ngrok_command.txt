@@ -1,0 +1,42 @@
+ngrok reverse proxy:
+ngrok http --url=acquire-busybody-going.ngrok-free.dev 8000
+
+telegram url:
+
+Check if your token is valid:
+https://api.telegram.org/botYOUR_BOT_TOKEN/getMe
+
+Remove existing webhook:
+https://api.telegram.org/botYOUR_BOT_TOKEN/deleteWebhook
+
+To verify if your webhook is set correctly:
+https://api.telegram.org/botYOUR_BOT_TOKEN/getWebhookInfo
+
+
+Manual Webhook Setup
+Replace YOUR_BOT_TOKEN and YOUR_DOMAIN with your actual values:
+https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://yourdomain.com/webhook
+
+
+//telegram bot setup process
+1. open your telegram app and search for BotFather
+2. type /newbot and follow the instructions to create a new bot
+3. after creating the bot, you will receive a token. copy that token and save it.
+
+//set up your bot in your laravel project
+1. open your laravel project and go to the .env file
+2. add the following line to your .env file:
+TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
+
+//set up your webhook
+1. open your terminal and run the following command to start ngrok for local development:
+    ngrok http --url=acquire-busybody-going.ngrok-free.dev 8000
+2. open your browser and go to the following URL to set up your webhook:
+    https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://acquire-busybody-going.ngrok-free.dev/api/webhook
+3. you should see a message saying "Webhook was set". This means your webhook is set up correctly.
+4. to verify if your webhook is set correctly, go to the following URL:
+    https://api.telegram.org/botYOUR_BOT_TOKEN/getWebhookInfo
+5. create api.php file in routes folder and add the following code:
+    use App\Http\Controllers\TelegramWebhookController;
+    Route::post('/webhook', [TelegramWebhookController::class, 'handle']);
+6. create a model, migration and controller file for save the data in database.
