@@ -123,4 +123,7 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    'execution_timeout' => env('MAX_EXECUTION_TIME', 300),
+    'memory_limit' => env('MEMORY_LIMIT', '1024M'),
+
 ];
