@@ -18,7 +18,7 @@ class ProcessDocumentJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $timeout = 600;
+    public $timeout = 900; // 15 minutes
     public $tries = 2;
     public $backoff = [60, 120];
 
@@ -32,12 +32,12 @@ class ProcessDocumentJob implements ShouldQueue
         $this->filePath = $filePath;
         $this->fileType = $fileType;
 
-        set_time_limit(600);
+        set_time_limit(900);
+        ini_set('max_execution_time', 900);
     }
 
     public function handle(OpenAIService $openAIService)
     {
-        // ✅ FIX: Use DB transaction to avoid dirty-tracking issues
         DB::beginTransaction();
 
         try {
@@ -47,7 +47,6 @@ class ProcessDocumentJob implements ShouldQueue
                 'file_type' => $this->fileType
             ]);
 
-            // ✅ FIX: Use fresh() to avoid dirty-tracking
             $document = Document::find($this->documentId);
 
             if (!$document) {
@@ -56,12 +55,10 @@ class ProcessDocumentJob implements ShouldQueue
                 return;
             }
 
-            // Update status using fresh instance
             $document->status = 'processing';
             $document->save();
             $document->refresh();
 
-            // Get full file path
             $fullPath = Storage::disk('public')->path($this->filePath);
 
             if (!file_exists($fullPath)) {
@@ -71,11 +68,9 @@ class ProcessDocumentJob implements ShouldQueue
             $fileSize = filesize($fullPath);
             Log::info('File size: ' . $fileSize . ' bytes');
 
-            // ✅ Process based on file type
             $extractedText = null;
             $extractionMethod = 'unknown';
 
-            // TEXT FILES - Read directly
             if (in_array($this->fileType, ['txt', 'csv', 'log', 'md', 'json', 'xml', 'yaml', 'yml'])) {
                 Log::info('Text file detected, reading directly');
                 $extractedText = file_get_contents($fullPath);
@@ -84,66 +79,54 @@ class ProcessDocumentJob implements ShouldQueue
                 if (empty($extractedText)) {
                     throw new \Exception('File is empty');
                 }
-            }
+            } elseif (in_array($this->fileType, ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'])) {
+                Log::info('Image file detected, processing with OpenAI Vision');
 
-            // IMAGES - Use OpenAI (only if small enough)
-            elseif (in_array($this->fileType, ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'])) {
-                Log::info('Image file detected, processing with OpenAI');
-
-                if ($fileSize > 5000000) { // 5MB
+                if ($fileSize > 5000000) {
                     throw new \Exception('Image too large for processing (max 5MB)');
                 }
 
                 $extractedText = $openAIService->extractText($this->filePath, $this->fileType);
                 $extractionMethod = 'openai_vision';
 
-                if (empty($extractedText) || str_contains($extractedText, 'Error')) {
-                    throw new \Exception('Image extraction failed: ' . $extractedText);
+                // Images may contain very little text; only reject empty/apology/binary
+                if ($openAIService->isFailedExtractionResponse($extractedText, 1)) {
+                    Log::error('Image OCR rejected', [
+                        'preview' => substr((string) $extractedText, 0, 200),
+                        'length' => strlen((string) $extractedText),
+                    ]);
+                    throw new \Exception('Image extraction failed: no readable text found in image');
                 }
-            }
+            } elseif ($this->fileType === 'pdf') {
+                Log::info('PDF file detected, extracting text');
 
-            // PDF - Try direct first, then OpenAI
-            elseif ($this->fileType === 'pdf') {
-                Log::info('PDF file detected');
-
-                // Try direct extraction
-                $extractedText = $this->extractTextFromPDFDirect($fullPath);
-
-                if (!empty($extractedText) && strlen($extractedText) > 100) {
-                    $extractionMethod = 'pdf_direct';
-                    Log::info('PDF direct extraction successful');
-                } elseif ($fileSize < 2000000) { // 2MB
-                    Log::info('Processing PDF with OpenAI');
-                    $extractedText = $openAIService->extractText($this->filePath, $this->fileType);
-                    $extractionMethod = 'openai_pdf';
-
-                    if (empty($extractedText) || str_contains($extractedText, 'Error')) {
-                        throw new \Exception('PDF extraction failed: ' . $extractedText);
-                    }
-                } else {
-                    throw new \Exception('PDF too large for OpenAI and direct extraction failed');
+                if ($fileSize > 15000000) {
+                    throw new \Exception('PDF too large for processing (max 15MB)');
                 }
-            }
 
-            // DOCX - Direct extraction
-            elseif ($this->fileType === 'docx') {
+                $extractedText = $openAIService->extractText($this->filePath, $this->fileType);
+                $extractionMethod = $openAIService->getLastPdfExtractionMethod() ?? 'pdf';
+
+                if ($openAIService->isFailedExtractionResponse($extractedText)) {
+                    throw new \Exception('PDF extraction failed: OpenAI returned no usable text');
+                }
+
+                Log::info('PDF extraction successful', [
+                    'method' => $extractionMethod,
+                    'length' => strlen($extractedText),
+                ]);
+            } elseif ($this->fileType === 'docx') {
                 Log::info('DOCX file detected');
                 $extractedText = $this->extractTextFromDOCXDirect($fullPath);
                 $extractionMethod = 'docx_direct';
 
-                if (empty($extractedText) || strlen($extractedText) < 50) {
+                if (empty($extractedText) || strlen(trim($extractedText)) < 1) {
                     throw new \Exception('DOCX extraction failed');
                 }
+            } else {
+                throw new \Exception("Unsupported file type: {$this->fileType}");
             }
 
-            // Default - mark as completed with note
-            else {
-                Log::info('Unsupported file type: ' . $this->fileType);
-                $extractedText = "File type: {$this->fileType}. Size: {$fileSize} bytes. This file type is not supported for text extraction.";
-                $extractionMethod = 'unsupported';
-            }
-
-            // ✅ Save the extracted text
             $metadata = $document->metadata ?? [];
             $metadata['text_length'] = strlen($extractedText);
             $metadata['processed_at'] = now()->toDateTimeString();
@@ -154,6 +137,7 @@ class ProcessDocumentJob implements ShouldQueue
             $document->extracted_text = $extractedText;
             $document->metadata = $metadata;
             $document->status = 'completed';
+            $document->error_message = null;
             $document->save();
             $document->refresh();
 
@@ -163,12 +147,10 @@ class ProcessDocumentJob implements ShouldQueue
                 'text_length' => strlen($extractedText)
             ]);
 
-            // ✅ Create chunks (in a separate try-catch)
             try {
                 $this->createChunks($document, $extractedText, $openAIService);
             } catch (\Exception $e) {
                 Log::error('Chunk creation failed but document was saved: ' . $e->getMessage());
-                // Don't fail the job, just log the error
             }
 
             DB::commit();
@@ -183,7 +165,6 @@ class ProcessDocumentJob implements ShouldQueue
                 'trace' => $e->getTraceAsString()
             ]);
 
-            // ✅ Update document status to failed (outside transaction if needed)
             try {
                 $document = Document::find($this->documentId);
                 if ($document) {
@@ -195,8 +176,16 @@ class ProcessDocumentJob implements ShouldQueue
                 Log::error('Failed to update document status: ' . $updateError->getMessage());
             }
 
-            // ✅ Don't retry for permanent errors
-            $permanentErrors = ['File not found', 'File is empty', 'Image too large', 'PDF too large'];
+            $permanentErrors = [
+                'File not found',
+                'File is empty',
+                'Image too large',
+                'PDF too large',
+                'PDF extraction failed',
+                'Unsupported file type',
+                'OpenAI could not extract',
+            ];
+
             foreach ($permanentErrors as $permanentError) {
                 if (str_contains($e->getMessage(), $permanentError)) {
                     $this->delete();
@@ -210,76 +199,50 @@ class ProcessDocumentJob implements ShouldQueue
 
     private function createChunks($document, $text, OpenAIService $openAIService)
     {
-        try {
-            if (empty($text)) {
-                Log::info('Text too short for chunking, skipping');
-                return;
+        if (empty($text) || strlen(trim($text)) < 1) {
+            Log::info('Text empty for chunking, skipping');
+            return;
+        }
+
+        $chunks = $openAIService->chunkText($text, 1500, 200);
+
+        if (empty($chunks)) {
+            Log::warning('No chunks created');
+            return;
+        }
+
+        Log::info('Creating ' . count($chunks) . ' chunks');
+
+        $savedCount = 0;
+        foreach ($chunks as $index => $chunkContent) {
+            if (empty(trim($chunkContent))) {
+                continue;
             }
 
-            $chunks = $openAIService->chunkText($text, 1500, 200);
-
-            if (empty($chunks)) {
-                Log::warning('No chunks created');
-                return;
-            }
-
-            Log::info('Creating ' . count($chunks) . ' chunks');
-
-            $savedCount = 0;
-            foreach ($chunks as $index => $chunkContent) {
-                if (empty(trim($chunkContent))) {
-                    continue;
-                }
-
+            try {
+                $embedding = null;
                 try {
-                    // Try to create embedding
-                    $embedding = null;
-                    try {
-                        if (strlen($chunkContent) > 100) {
-                            $embedding = $openAIService->createEmbedding($chunkContent);
-                        }
-                    } catch (\Exception $e) {
-                        Log::warning('Embedding creation failed for chunk ' . $index);
+                    if (strlen($chunkContent) > 100) {
+                        $embedding = $openAIService->createEmbedding($chunkContent);
                     }
-
-                    DocumentChunk::create([
-                        'document_id' => $document->id,
-                        'content' => $chunkContent,
-                        'chunk_index' => $index,
-                        'embedding' => $embedding,
-                    ]);
-
-                    $savedCount++;
                 } catch (\Exception $e) {
-                    Log::error('Failed to save chunk ' . $index . ': ' . $e->getMessage());
+                    Log::warning('Embedding creation failed for chunk ' . $index);
                 }
+
+                DocumentChunk::create([
+                    'document_id' => $document->id,
+                    'content' => $chunkContent,
+                    'chunk_index' => $index,
+                    'embedding' => $embedding,
+                ]);
+
+                $savedCount++;
+            } catch (\Exception $e) {
+                Log::error('Failed to save chunk ' . $index . ': ' . $e->getMessage());
             }
-
-            Log::info('Saved ' . $savedCount . ' chunks');
-
-        } catch (\Exception $e) {
-            Log::error('Chunk creation error: ' . $e->getMessage());
-            throw $e;
         }
-    }
 
-    private function extractTextFromPDFDirect($pdfPath)
-    {
-        try {
-            $content = file_get_contents($pdfPath);
-            preg_match_all('/\(([^)]*)\)/', $content, $matches);
-
-            if (!empty($matches[1])) {
-                $text = implode(' ', $matches[1]);
-                $text = str_replace(['\\\\(', '\\\\)', '\\\\n', '\\\\r', '\\\\t'], ['(', ')', "\n", "\r", "\t"], $text);
-                $text = preg_replace('/\s+/', ' ', $text);
-                return trim($text);
-            }
-            return '';
-        } catch (\Exception $e) {
-            Log::error('PDF direct extraction failed: ' . $e->getMessage());
-            return '';
-        }
+        Log::info('Saved ' . $savedCount . ' chunks');
     }
 
     private function extractTextFromDOCXDirect($docxPath)
@@ -299,7 +262,7 @@ class ProcessDocumentJob implements ShouldQueue
             }
             return '';
         } catch (\Exception $e) {
-            Log::error('DOCX direct extraction failed: ' . $e->getMessage());
+            Log::error('DOCX extraction failed: ' . $e->getMessage());
             return '';
         }
     }
