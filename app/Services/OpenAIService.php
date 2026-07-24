@@ -8,34 +8,45 @@ use Illuminate\Support\Facades\Storage;
 
 class OpenAIService
 {
+    private ?string $lastPdfExtractionMethod = null;
+
+    /**
+     * Last PDF extraction method used (pdf_parser|openai_assistant).
+     */
+    public function getLastPdfExtractionMethod(): ?string
+    {
+        return $this->lastPdfExtractionMethod;
+    }
+
     /**
      * Extract text from document using OpenAI
      */
     public function extractText($filePath, $fileType)
     {
+        $fullPath = $this->getFilePath($filePath);
+        if (!$fullPath || !file_exists($fullPath)) {
+            throw new \Exception('File not found: ' . $filePath);
+        }
+
+        Log::info('Processing file: ' . $fullPath);
+        Log::info('File type: ' . $fileType);
+        Log::info('File size: ' . filesize($fullPath) . ' bytes');
+
+        // PDF: throw on failure (no soft error strings)
+        if ($fileType === 'pdf') {
+            return $this->extractTextFromPDF($fullPath);
+        }
+
+        // Images: Vision OCR — throw on failure
+        if (in_array($fileType, ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff'], true)) {
+            return $this->extractTextFromImage($fullPath);
+        }
+
         try {
-            $fullPath = $this->getFilePath($filePath);
-
-            if (!$fullPath || !file_exists($fullPath)) {
-                throw new \Exception('File not found: ' . $filePath);
-            }
-
-            $fileSize = filesize($fullPath);
-            Log::info('Processing file: ' . $fullPath);
-            Log::info('File type: ' . $fileType);
-            Log::info('File size: ' . $fileSize . ' bytes');
-
-            // Handle different file types
-            if (in_array($fileType, ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff'])) {
-                return $this->extractTextFromImage($fullPath);
-            }
-
-            if ($fileType === 'pdf') {
-                return $this->extractTextFromPDF($fullPath);
-            }
-
             if (in_array($fileType, ['txt', 'csv', 'log', 'md', 'json', 'xml', 'yaml', 'yml'])) {
-                return $this->extractTextFromTextFile($fullPath);
+                Log::info('Text file detected, reading directly');
+                $content = file_get_contents($fullPath);
+                return $content ?: "File is empty";
             }
 
             if ($fileType === 'docx') {
@@ -43,112 +54,84 @@ class OpenAIService
             }
 
             return $this->extractTextFromGenericFile($fullPath, $fileType);
-
         } catch (\Exception $e) {
-            Log::error('OpenAI OCR Error: ' . $e->getMessage());
+            Log::error('Document processing error: ' . $e->getMessage());
             return "Error processing document: " . $e->getMessage();
         }
     }
 
     /**
-     * Extract text from text files with chunking and OpenAI processing
+     * Whether OpenAI returned a usable extraction (not an apology / binary junk).
+     *
+     * @param  int  $minLength  Minimum accepted text length (images may be short)
      */
-    private function extractTextFromTextFile($filePath)
+    public function isFailedExtractionResponse(?string $text, int $minLength = 50): bool
     {
-        try {
-            $content = file_get_contents($filePath);
-
-            if (empty($content)) {
-                return "File is empty";
-            }
-
-            $fileSize = strlen($content);
-            Log::info('Text file size: ' . $fileSize . ' characters');
-
-            // ✅ If file is small, process directly
-            if ($fileSize < 5000) {
-                Log::info('Small text file, processing directly with OpenAI');
-                return $this->processWithOpenAI($content, 'Clean and format this text');
-            }
-
-            // ✅ For large files, chunk and process
-            Log::info('Large text file, chunking for OpenAI processing');
-
-            // Create chunks with overlap for context
-            $chunks = $this->chunkText($content, 2000, 200);
-
-            Log::info('Created ' . count($chunks) . ' chunks');
-
-            $processedChunks = [];
-            $totalChunks = count($chunks);
-
-            foreach ($chunks as $index => $chunk) {
-                Log::info('Processing chunk ' . ($index + 1) . ' of ' . $totalChunks);
-
-                try {
-                    $processedChunk = $this->processWithOpenAI(
-                        $chunk,
-                        "Process this text chunk (chunk " . ($index + 1) . " of " . $totalChunks . "). Clean, format, and organize the content. Return ONLY the cleaned text."
-                    );
-                    $processedChunks[] = $processedChunk;
-
-                } catch (\Exception $e) {
-                    Log::error('Error processing chunk ' . ($index + 1) . ': ' . $e->getMessage());
-                    // If OpenAI fails, use the raw chunk
-                    $processedChunks[] = $chunk;
-                }
-            }
-
-            // Combine all processed chunks
-            $fullText = implode("\n\n", $processedChunks);
-            Log::info('Text processing complete. Final length: ' . strlen($fullText));
-
-            return $fullText;
-
-        } catch (\Exception $e) {
-            Log::error('Text file processing error: ' . $e->getMessage());
-            return "Failed to process text file: " . $e->getMessage();
+        if ($text === null || trim($text) === '' || strlen(trim($text)) < $minLength) {
+            return true;
         }
+
+        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $text)) {
+            return true;
+        }
+
+        $lower = strtolower($text);
+        $failureMarkers = [
+            'extraction_failed',
+            'unable to process',
+            'unable to process the file',
+            'internal errors',
+            'different method',
+            'cannot extract',
+            'could not extract',
+            'failed to extract',
+            'issues with extracting',
+            'download and check',
+            "i'll try a different",
+            'it seems there is an issue',
+            'it seems there are issues',
+            'it appears i am unable',
+            'failed to process pdf',
+            'error processing document',
+            'provide me with a description',
+            'extracting the text using your local tools',
+            'unfortunately, i\'m currently unable',
+            'no text extracted',
+            'image is too large',
+            'image processing failed',
+        ];
+
+        foreach ($failureMarkers as $marker) {
+            if (str_contains($lower, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
-     * Process text with OpenAI with error handling
+     * Get the full file path from storage
      */
-    private function processWithOpenAI($text, $instruction)
+    private function getFilePath($filePath)
     {
-        try {
-            // Ensure text is not too long
-            if (strlen($text) > 8000) {
-                $text = substr($text, 0, 8000);
+        $possiblePaths = [
+            Storage::disk('public')->path($filePath),
+            storage_path('app/public/' . $filePath),
+            storage_path('app/' . $filePath),
+            public_path('storage/' . $filePath),
+            $filePath,
+        ];
+
+        foreach ($possiblePaths as $path) {
+            if (file_exists($path)) {
+                Log::info('Found file at: ' . $path);
+                return $path;
             }
-
-            $response = OpenAI::chat()->create([
-                'model' => 'gpt-4o-mini',
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => "You are a text processing assistant. $instruction Return ONLY the processed text, no additional commentary."
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $text
-                    ]
-                ],
-                'max_tokens' => 4096,
-                'temperature' => 0.1,
-            ]);
-
-            if (!$response || !isset($response->choices[0]->message->content)) {
-                Log::error('Invalid OpenAI response');
-                return $text;
-            }
-
-            return $response->choices[0]->message->content;
-
-        } catch (\Exception $e) {
-            Log::error('OpenAI processing error: ' . $e->getMessage());
-            return $text; // Return original text on error
         }
+
+        Log::error('File not found: ' . $filePath);
+        return null;
     }
 
     /**
@@ -161,11 +144,12 @@ class OpenAIService
             $base64Image = base64_encode($imageData);
             $mimeType = mime_content_type($imagePath);
 
-            // ✅ Check if file is too large for base64 encoding
-            if (strlen($base64Image) > 20000000) { // 20MB limit
-                Log::warning('Image too large for base64 encoding');
-                return "Image is too large. Please compress the image.";
+            if (strlen($base64Image) > 5000000) {
+                Log::warning('Image too large for OpenAI processing');
+                throw new \Exception('Image is too large. Please compress to under 5MB.');
             }
+
+            Log::info('Sending image to OpenAI for OCR');
 
             $response = OpenAI::chat()->create([
                 'model' => 'gpt-4o-mini',
@@ -175,7 +159,7 @@ class OpenAIService
                         'content' => [
                             [
                                 'type' => 'text',
-                                'text' => 'Extract ALL text from this image. If it contains a document, table, form, or handwritten text, extract it accurately and completely. Return ONLY the extracted text, no additional commentary.'
+                                'text' => 'Extract ALL text from this image. If it contains a document, table, form, or handwritten text, extract it accurately and completely. Return ONLY the extracted text, no additional commentary. If there is truly no text, return exactly: NO_TEXT_FOUND'
                             ],
                             [
                                 'type' => 'image_url',
@@ -192,52 +176,111 @@ class OpenAIService
             ]);
 
             if (!$response || !isset($response->choices[0]->message->content)) {
-                Log::error('Invalid API response structure');
-                return "No text extracted from image";
+                throw new \Exception('No text extracted from image');
             }
 
-            return $response->choices[0]->message->content;
+            $extractedText = trim($response->choices[0]->message->content);
+            Log::info('Image OCR complete. Text length: ' . strlen($extractedText));
+
+            if ($extractedText === '' || strcasecmp($extractedText, 'NO_TEXT_FOUND') === 0) {
+                throw new \Exception('No readable text found in image');
+            }
+
+            return $extractedText;
 
         } catch (\Exception $e) {
             Log::error('Image OCR Error: ' . $e->getMessage());
-            return "Failed to extract text from image: " . $e->getMessage();
+            throw $e;
         }
     }
 
     /**
-     * Extract text from PDF using OpenAI
+     * Extract text from PDF.
+     * 1) Local PDF parser (reliable for text-based PDFs)
+     * 2) OpenAI Assistants fallback
      */
     private function extractTextFromPDF($pdfPath)
     {
+        $this->lastPdfExtractionMethod = null;
+
+        Log::info('Attempting PDF text extraction with smalot/pdfparser');
+        $parsedText = $this->extractTextWithPdfParser($pdfPath);
+
+        if ($this->isUsableExtractedText($parsedText)) {
+            $this->lastPdfExtractionMethod = 'pdf_parser';
+            Log::info('PDF parser extraction successful. Length: ' . strlen($parsedText));
+            return $parsedText;
+        }
+
+        Log::info('PDF parser returned insufficient text, trying OpenAI Assistants');
+
         try {
-            // Try direct text extraction first
-            $text = $this->extractTextFromPDFDirect($pdfPath);
-            if (!empty($text) && strlen($text) > 100) {
-                Log::info('PDF direct extraction successful. Length: ' . strlen($text));
-                return $text;
-            }
-
-            // ✅ Try to process PDF using OpenAI's File API
-            Log::info('Attempting PDF processing with OpenAI File API');
-            return $this->extractTextFromPDFWithOpenAI($pdfPath);
-
+            $assistantText = $this->extractTextFromPDFUsingFileAPI($pdfPath);
+            $this->lastPdfExtractionMethod = 'openai_assistant';
+            return $assistantText;
         } catch (\Exception $e) {
-            Log::error('PDF OCR Error: ' . $e->getMessage());
-            return "Failed to extract text from PDF: " . $e->getMessage();
+            Log::error('OpenAI Assistants PDF fallback failed: ' . $e->getMessage());
+            throw new \Exception(
+                'PDF extraction failed: no readable text layer found, and OpenAI Assistants could not extract content from this file.',
+                0,
+                $e
+            );
         }
     }
 
     /**
-     * Extract text from PDF using OpenAI File API
+     * Extract embedded text from a PDF using smalot/pdfparser.
      */
-    private function extractTextFromPDFWithOpenAI($pdfPath)
+    private function extractTextWithPdfParser(string $pdfPath): string
     {
         try {
-            $pdfContent = file_get_contents($pdfPath);
-            $tempFile = tempnam(sys_get_temp_dir(), 'pdf_') . '.pdf';
-            file_put_contents($tempFile, $pdfContent);
+            $parser = new \Smalot\PdfParser\Parser();
+            $pdf = $parser->parseFile($pdfPath);
+            $text = trim($pdf->getText() ?? '');
 
-            // Upload file to OpenAI
+            // Normalize whitespace a bit for storage/chunking
+            $text = preg_replace("/[ \t]+/", ' ', $text);
+            $text = preg_replace("/\n{3,}/", "\n\n", $text);
+
+            return trim($text);
+        } catch (\Throwable $e) {
+            Log::warning('PDF parser error: ' . $e->getMessage());
+            return '';
+        }
+    }
+
+    /**
+     * Usable document text (not empty, not binary, not an AI apology).
+     */
+    private function isUsableExtractedText(?string $text): bool
+    {
+        if ($this->isFailedExtractionResponse($text)) {
+            return false;
+        }
+
+        $readableChars = preg_match_all('/[\p{L}\p{N}\s\.\,\;\:\!\?\(\)\-\/\n\r]/u', $text);
+        $ratio = $readableChars / max(strlen($text), 1);
+
+        return $ratio >= 0.6;
+    }
+
+    /**
+     * Upload PDF to OpenAI Assistants and extract text.
+     */
+    private function extractTextFromPDFUsingFileAPI($pdfPath)
+    {
+        $tempFile = null;
+        $fileId = null;
+        $assistantId = null;
+        $createdAssistant = false;
+
+        try {
+            $tempFile = tempnam(sys_get_temp_dir(), 'pdf_') . '.pdf';
+            if (file_put_contents($tempFile, file_get_contents($pdfPath)) === false) {
+                throw new \Exception('Failed to create temporary PDF copy');
+            }
+
+            Log::info('Uploading PDF to OpenAI...');
             $file = OpenAI::files()->upload([
                 'file' => fopen($tempFile, 'r'),
                 'purpose' => 'assistants',
@@ -247,97 +290,127 @@ class OpenAIService
                 throw new \Exception('Failed to upload PDF to OpenAI');
             }
 
-            // Create assistant
-            $assistant = OpenAI::assistants()->create([
-                'model' => 'gpt-4o-mini',
-                'name' => 'PDF Text Extractor',
-                'instructions' => 'Extract all text from the provided PDF document. Return the complete text content with proper formatting.',
-                'tools' => [['type' => 'retrieval']],
-                'file_ids' => [$file->id],
+            $fileId = $file->id;
+            Log::info('PDF uploaded to OpenAI with ID: ' . $fileId);
+
+            $assistantId = config('openai.pdf_assistant_id');
+            if (!$assistantId) {
+                Log::info('Creating temporary OpenAI assistant for PDF extraction...');
+                $assistant = OpenAI::assistants()->create([
+                    'model' => 'gpt-4o-mini',
+                    'name' => 'PDF Text Extractor',
+                    'instructions' => 'You extract text from PDF files. Use code_interpreter to read the attached PDF. Return ONLY the extracted document text. If extraction fails, reply exactly: EXTRACTION_FAILED',
+                    'tools' => [
+                        ['type' => 'code_interpreter'],
+                    ],
+                ]);
+                $assistantId = $assistant->id;
+                $createdAssistant = true;
+                Log::info('Assistant created with ID: ' . $assistantId);
+            } else {
+                Log::info('Using configured PDF assistant: ' . $assistantId);
+            }
+
+            Log::info('Creating OpenAI thread...');
+            $thread = OpenAI::threads()->create([
+                'messages' => [[
+                    'role' => 'user',
+                    'content' => 'Extract all text from the attached PDF. Return only the document text.',
+                    'attachments' => [[
+                        'file_id' => $fileId,
+                        'tools' => [['type' => 'code_interpreter']],
+                    ]],
+                ]],
             ]);
 
-            // Create thread
-            $thread = OpenAI::threads()->create([]);
+            Log::info('Thread created with ID: ' . $thread->id);
 
-            // Add message
-            OpenAI::threads()->messages()->create($thread->id, [
-                'role' => 'user',
-                'content' => 'Please extract all text from the uploaded PDF document. Return the complete text with all formatting preserved.',
-            ]);
-
-            // Run assistant
+            Log::info('Running assistant...');
             $run = OpenAI::threads()->runs()->create($thread->id, [
-                'assistant_id' => $assistant->id,
+                'assistant_id' => $assistantId,
             ]);
 
-            // Wait for completion
-            $run = $this->waitForRun($thread->id, $run->id);
+            $this->waitForRun($thread->id, $run->id);
 
-            // Get messages
+            Log::info('Retrieving messages...');
             $messages = OpenAI::threads()->messages()->list($thread->id);
 
             $extractedText = '';
             foreach ($messages->data as $message) {
-                if ($message->role === 'assistant') {
-                    foreach ($message->content as $content) {
-                        if (isset($content->text->value)) {
-                            $extractedText .= $content->text->value . "\n\n";
-                        }
+                if ($message->role !== 'assistant') {
+                    continue;
+                }
+                foreach ($message->content as $content) {
+                    if (isset($content->text->value)) {
+                        $extractedText .= $content->text->value . "\n\n";
                     }
                 }
             }
 
-            // Clean up
-            try {
-                OpenAI::files()->delete($file->id);
-                OpenAI::assistants()->delete($assistant->id);
-            } catch (\Exception $e) {
-                Log::warning('Cleanup error: ' . $e->getMessage());
-            }
-
-            if (file_exists($tempFile)) {
-                unlink($tempFile);
-            }
-
+            $extractedText = trim($extractedText);
             Log::info('PDF extraction complete. Text length: ' . strlen($extractedText));
 
-            return $extractedText ?: "No text extracted from PDF";
-
-        } catch (\Exception $e) {
-            Log::error('PDF File API error: ' . $e->getMessage());
-
-            if (isset($tempFile) && file_exists($tempFile)) {
-                unlink($tempFile);
+            if ($this->isFailedExtractionResponse($extractedText)) {
+                throw new \Exception('OpenAI could not extract text from this PDF');
             }
 
-            throw new \Exception('Failed to process PDF with OpenAI: ' . $e->getMessage());
+            return $extractedText;
+        } catch (\Exception $e) {
+            Log::error('PDF Assistants API error: ' . $e->getMessage());
+            throw new \Exception('PDF extraction failed: ' . $e->getMessage(), 0, $e);
+        } finally {
+            if ($tempFile && file_exists($tempFile)) {
+                @unlink($tempFile);
+            }
+
+            if ($fileId) {
+                try {
+                    OpenAI::files()->delete($fileId);
+                } catch (\Throwable $e) {
+                    Log::warning('OpenAI file cleanup failed: ' . $e->getMessage());
+                }
+            }
+
+            if ($createdAssistant && $assistantId) {
+                try {
+                    OpenAI::assistants()->delete($assistantId);
+                } catch (\Throwable $e) {
+                    Log::warning('OpenAI assistant cleanup failed: ' . $e->getMessage());
+                }
+            }
         }
     }
 
     /**
-     * Extract text from PDF directly
+     * Wait for an Assistants run to complete.
      */
-    private function extractTextFromPDFDirect($pdfPath)
+    private function waitForRun($threadId, $runId, $maxAttempts = 60)
     {
-        try {
-            $content = file_get_contents($pdfPath);
-            preg_match_all('/\(([^)]*)\)/', $content, $matches);
+        $attempts = 0;
 
-            if (!empty($matches[1])) {
-                $text = implode(' ', $matches[1]);
-                $text = str_replace(['\\\\(', '\\\\)', '\\\\n', '\\\\r', '\\\\t'], ['(', ')', "\n", "\r", "\t"], $text);
-                $text = preg_replace('/\s+/', ' ', $text);
-                return trim($text);
+        while ($attempts < $maxAttempts) {
+            $run = OpenAI::threads()->runs()->retrieve($threadId, $runId);
+
+            Log::info('Run status: ' . $run->status . ' (attempt ' . ($attempts + 1) . '/' . $maxAttempts . ')');
+
+            if ($run->status === 'completed') {
+                return $run;
             }
-            return '';
-        } catch (\Exception $e) {
-            Log::error('Direct PDF extraction failed: ' . $e->getMessage());
-            return '';
+
+            if (in_array($run->status, ['failed', 'cancelled', 'expired'], true)) {
+                $detail = $run->lastError->message ?? $run->status;
+                throw new \Exception('Run failed with status: ' . $detail);
+            }
+
+            sleep(3);
+            $attempts++;
         }
+
+        throw new \Exception('Run timed out after ' . $maxAttempts . ' attempts');
     }
 
     /**
-     * Extract text from DOCX using OpenAI
+     * Extract text from DOCX
      */
     private function extractTextFromDOCX($docxPath)
     {
@@ -349,39 +422,13 @@ class OpenAIService
                 return $text;
             }
 
-            // ✅ Try to process with OpenAI
-            Log::info('Processing DOCX with OpenAI');
-            $docxContent = file_get_contents($docxPath);
-            $base64Docx = base64_encode($docxContent);
-
-            $response = OpenAI::chat()->create([
-                'model' => 'gpt-4o-mini',
-                'messages' => [
-                    [
-                        'role' => 'user',
-                        'content' => [
-                            [
-                                'type' => 'text',
-                                'text' => 'Extract ALL text from this Word document. Include all headings, paragraphs, tables, bullet points, and any formatted text. Return ONLY the extracted text.'
-                            ],
-                            [
-                                'type' => 'image_url',
-                                'image_url' => [
-                                    'url' => "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{$base64Docx}",
-                                    'detail' => 'high'
-                                ]
-                            ]
-                        ]
-                    ]
-                ],
-                'max_tokens' => 4096,
-            ]);
-
-            if (!$response || !isset($response->choices[0]->message->content)) {
-                return "No text extracted from DOCX";
+            // If direct fails, try reading as text
+            $content = file_get_contents($docxPath);
+            if (mb_check_encoding($content, 'UTF-8') && strlen($content) > 0) {
+                return $content;
             }
 
-            return $response->choices[0]->message->content;
+            return "Could not extract text from DOCX. Please convert to text format.";
 
         } catch (\Exception $e) {
             Log::error('DOCX OCR Error: ' . $e->getMessage());
@@ -423,10 +470,6 @@ class OpenAIService
             $content = file_get_contents($filePath);
 
             if (mb_check_encoding($content, 'UTF-8') && strlen($content) > 0) {
-                // Process with OpenAI if text is clean
-                if (strlen($content) < 5000) {
-                    return $this->processWithOpenAI($content, "Clean and format this text");
-                }
                 return $content;
             }
 
@@ -439,65 +482,21 @@ class OpenAIService
     }
 
     /**
-     * Wait for a run to complete
-     */
-    private function waitForRun($threadId, $runId, $maxAttempts = 30)
-    {
-        $attempts = 0;
-        while ($attempts < $maxAttempts) {
-            $run = OpenAI::threads()->runs()->retrieve($threadId, $runId);
-
-            if ($run->status === 'completed') {
-                return $run;
-            }
-
-            if (in_array($run->status, ['failed', 'cancelled', 'expired'])) {
-                throw new \Exception('Run failed with status: ' . $run->status);
-            }
-
-            sleep(2);
-            $attempts++;
-        }
-
-        throw new \Exception('Run timed out after ' . $maxAttempts . ' attempts');
-    }
-
-    /**
-     * Get the full file path from storage
-     */
-    private function getFilePath($filePath)
-    {
-        $possiblePaths = [
-            Storage::disk('public')->path($filePath),
-            storage_path('app/public/' . $filePath),
-            storage_path('app/' . $filePath),
-            public_path('storage/' . $filePath),
-            $filePath,
-        ];
-
-        foreach ($possiblePaths as $path) {
-            if (file_exists($path)) {
-                return $path;
-            }
-        }
-
-        return null;
-    }
-
-    /**
      * Create embeddings for text using OpenAI
      */
     public function createEmbedding($text)
     {
         try {
-            if (empty($text)) {
+            if (empty($text) || strlen($text) < 10) {
+                Log::warning('Text too short for embedding');
                 return null;
             }
 
-            // Truncate to safe length
             if (strlen($text) > 8000) {
                 $text = substr($text, 0, 8000);
             }
+
+            Log::info('Creating embedding for text length: ' . strlen($text));
 
             $response = OpenAI::embeddings()->create([
                 'model' => 'text-embedding-ada-002',
@@ -529,76 +528,62 @@ class OpenAIService
         $text = trim($text);
         $textLength = strlen($text);
 
-        // If text is smaller than chunk size, return as single chunk
         if ($textLength <= $chunkSize) {
             return [$text];
         }
 
+        // Overlap must be smaller than chunk size or the cursor never advances
+        $overlap = max(0, min($overlap, $chunkSize - 1));
+
         $chunks = [];
         $start = 0;
+        $maxChunks = (int) ceil($textLength / max($chunkSize - $overlap, 1)) + 5;
 
         while ($start < $textLength) {
-            // Calculate end position
-            $end = $start + $chunkSize;
-
-            // If end is beyond text length, use text length
-            if ($end >= $textLength) {
-                $chunks[] = trim(substr($text, $start));
+            if (count($chunks) >= $maxChunks) {
+                Log::warning('chunkText aborted: max chunk safety limit reached');
                 break;
             }
 
-            // Try to find a good break point
-            $search = substr($text, $start, $chunkSize);
+            $end = min($start + $chunkSize, $textLength);
 
-            // Try to break at sentence boundary (period followed by space)
-            $sentenceBreak = strrpos($search, '. ');
-            if ($sentenceBreak !== false && $sentenceBreak > $chunkSize * 0.6) {
-                $end = $start + $sentenceBreak + 2;
-            } else {
-                // Try to break at space
-                $spaceBreak = strrpos($search, ' ');
-                if ($spaceBreak !== false && $spaceBreak > $chunkSize * 0.6) {
-                    $end = $start + $spaceBreak;
+            if ($end < $textLength) {
+                $search = substr($text, $start, $chunkSize);
+                $sentenceBreak = strrpos($search, '. ');
+                if ($sentenceBreak !== false && $sentenceBreak > (int) ($chunkSize * 0.7)) {
+                    $end = $start + $sentenceBreak + 2;
+                } else {
+                    $spaceBreak = strrpos($search, ' ');
+                    if ($spaceBreak !== false && $spaceBreak > (int) ($chunkSize * 0.7)) {
+                        $end = $start + $spaceBreak;
+                    }
                 }
             }
 
-            // Ensure we don't go backwards or create empty chunks
+            // Guard: end must always move forward
             if ($end <= $start) {
-                $end = $start + $chunkSize;
+                $end = min($start + $chunkSize, $textLength);
             }
 
-            // Extract the chunk
             $chunk = trim(substr($text, $start, $end - $start));
-            if (!empty($chunk)) {
+            if ($chunk !== '') {
                 $chunks[] = $chunk;
             }
 
-            // Move start position for next chunk (with overlap)
-            $start = $end - $overlap;
-
-            // Prevent infinite loop
-            if ($start >= $textLength) {
+            // Last segment — stop (do not rewind with overlap)
+            if ($end >= $textLength) {
                 break;
             }
 
-            // Ensure progress is made
-            if ($start <= $end && $start > 0) {
-                // If we're stuck, force progress
-                $start = $end + 1;
+            $nextStart = $end - $overlap;
+            if ($nextStart <= $start) {
+                $nextStart = $end; // force progress
             }
+            $start = $nextStart;
         }
 
-        // Remove any empty chunks
-        $chunks = array_filter($chunks, function($chunk) {
-            return !empty(trim($chunk));
-        });
-
-        // If no chunks were created, return the original text as one chunk
-        if (empty($chunks)) {
-            return [$text];
-        }
-
-        return array_values($chunks);
+        Log::info('Created ' . count($chunks) . ' chunks');
+        return $chunks;
     }
 
     /**
@@ -611,9 +596,11 @@ class OpenAIService
                 return "No text to summarize.";
             }
 
-            if (strlen($text) > 8000) {
-                $text = substr($text, 0, 8000);
+            if (strlen($text) > 3000) {
+                $text = substr($text, 0, 3000);
             }
+
+            Log::info('Generating summary...');
 
             $response = OpenAI::chat()->create([
                 'model' => 'gpt-4o-mini',
@@ -639,7 +626,7 @@ class OpenAIService
 
         } catch (\Exception $e) {
             Log::error('Text summarization error: ' . $e->getMessage());
-            return "Failed to generate summary: " . $e->getMessage();
+            return "Summary generation failed: " . $e->getMessage();
         }
     }
 
@@ -653,9 +640,11 @@ class OpenAIService
                 return ['error' => 'No text provided'];
             }
 
-            if (strlen($text) > 8000) {
-                $text = substr($text, 0, 8000);
+            if (strlen($text) > 3000) {
+                $text = substr($text, 0, 3000);
             }
+
+            Log::info('Extracting key information...');
 
             $response = OpenAI::chat()->create([
                 'model' => 'gpt-4o-mini',
