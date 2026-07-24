@@ -45,5 +45,15 @@ return [
     | for a response. By default, the client will time out after 30 seconds.
     */
 
-    'request_timeout' => env('OPENAI_REQUEST_TIMEOUT', 30),
+    'request_timeout' => env('OPENAI_REQUEST_TIMEOUT', 120),
+
+    /*
+    |--------------------------------------------------------------------------
+    | PDF Extractor Assistant
+    |--------------------------------------------------------------------------
+    |
+    | Optional reusable Assistants API ID. If empty, a temporary assistant is
+    | created per PDF job and deleted after extraction.
+    */
+    'pdf_assistant_id' => env('OPENAI_PDF_ASSISTANT_ID'),
 ];
