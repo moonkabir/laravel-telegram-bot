@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Document;
 use App\Models\DocumentChunk;
 use App\Services\OpenAIService;
+use App\Services\QdrantService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -229,12 +230,35 @@ class ProcessDocumentJob implements ShouldQueue
                     Log::warning('Embedding creation failed for chunk ' . $index);
                 }
 
-                DocumentChunk::create([
+                Log::info('Chunk save start');
+
+                $chunk = DocumentChunk::create([
                     'document_id' => $document->id,
                     'content' => $chunkContent,
                     'chunk_index' => $index,
-                    'embedding' => $embedding,
                 ]);
+
+                Log::info('Chunk: ' . json_encode($chunk));
+
+                if ($embedding) {
+                    Log::info('Upserting chunk embedding: ' . $chunk->id);
+
+                    try {
+                        app(QdrantService::class)->upsertChunk(
+                            $chunk->id,
+                            $embedding,
+                            [
+                                'document_id' => $document->id,
+                                'chunk_index' => $index,
+                                'document_name' => $document->name,
+                                'content' => mb_substr($chunkContent, 0, 500),
+                            ]
+                        );
+                        Log::info('Qdrant upsert successful for chunk ' . $chunk->id);
+                    } catch (\Throwable $e) {
+                        Log::error('Qdrant upsert failed for chunk ' . $chunk->id . ': ' . $e->getMessage());
+                    }
+                }
 
                 $savedCount++;
             } catch (\Exception $e) {
