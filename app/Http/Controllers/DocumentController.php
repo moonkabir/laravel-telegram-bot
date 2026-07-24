@@ -57,8 +57,6 @@ class DocumentController extends Controller
                 ], 500);
             }
 
-            Log::info('File uploaded: ' . $path);
-
             // Get file info
             $fileType = $file->getClientOriginalExtension();
             $fileSize = $file->getSize();
