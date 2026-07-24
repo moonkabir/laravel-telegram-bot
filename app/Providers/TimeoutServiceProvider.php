@@ -9,8 +9,8 @@ class TimeoutServiceProvider extends ServiceProvider
     public function boot()
     {
         // Set max execution time
-        $timeout = config('app.execution_timeout', 300);
-        set_time_limit($timeout);
+        // $timeout = config('app.execution_timeout', 300);
+        // set_time_limit($timeout);
 
         // Set memory limit
         $memoryLimit = config('app.memory_limit', '1024M');
@@ -20,6 +20,6 @@ class TimeoutServiceProvider extends ServiceProvider
         ini_set('upload_max_filesize', '100M');
         ini_set('post_max_size', '100M');
         ini_set('max_input_time', 600);
-        ini_set('max_execution_time', 300);
+        // ini_set('max_execution_time', 300);
     }
 }
