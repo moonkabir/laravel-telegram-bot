@@ -120,20 +120,8 @@ class TelegramWebhookController extends Controller
     private function handleRegularMessage($text, $chatId, $userId)
     {
         try {
-            $lowerText = strtolower($text);
-
-            if (str_contains($lowerText, 'hello') || str_contains($lowerText, 'hi')) {
-                return "Hello! 👋 How can I help you today?";
-            }
-
-            if (str_contains($lowerText, 'how are you')) {
-                return "I'm doing great! Thanks for asking! 🤖";
-            }
-
-            if (str_contains($lowerText, 'weather')) {
-                return "I don't know the weather right now, but I can check for you! ☀️";
-            }
-            return app(RagService::class)->answerFromDocuments($text);
+            // Greetings/basic chat → OpenAI; other questions → uploaded documents (RAG).
+            return app(RagService::class)->answer($text);
         } catch (\Throwable $e) {
             \Log::error('RAG answer failed: '.$e->getMessage());
             return "Sorry, I couldn't process your question right now.";
