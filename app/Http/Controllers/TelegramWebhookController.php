@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Models\TelegramMessage;
 use Telegram\Bot\Laravel\Facades\Telegram;
 use Telegram\Bot\Objects\Update;
+use App\Services\RagService;
 
 class TelegramWebhookController extends Controller
 {
@@ -60,18 +61,21 @@ class TelegramWebhookController extends Controller
             $chat = $message->getChat();
             $from = $message->getFrom();
 
-            return TelegramMessage::create([
-                'user_id' => $from->getId(),
-                'username' => $from->getUsername(),
-                'first_name' => $from->getFirstName(),
-                'last_name' => $from->getLastName(),
-                'message_id' => $message->getMessageId(),
-                'message_text' => $message->getText(),
-                'chat_id' => $chat->getId(),
-                'chat_type' => $chat->getType(),
-                'raw_data' => $update->toArray(),
-                'is_processed' => false,
-            ]);
+            return TelegramMessage::firstOrCreate(
+                ['message_id' => $message->getMessageId()],    
+                [
+                    'user_id' => $from->getId(),
+                    'username' => $from->getUsername(),
+                    'first_name' => $from->getFirstName(),
+                    'last_name' => $from->getLastName(),
+                    'message_id' => $message->getMessageId(),
+                    'message_text' => $message->getText(),
+                    'chat_id' => $chat->getId(),
+                    'chat_type' => $chat->getType(),
+                    'raw_data' => $update->toArray(),
+                    'is_processed' => false,
+                ]
+            );
 
         } catch (\Exception $e) {
             \Log::error('Failed to store message: ' . $e->getMessage());
@@ -115,22 +119,25 @@ class TelegramWebhookController extends Controller
 
     private function handleRegularMessage($text, $chatId, $userId)
     {
-        $lowerText = strtolower($text);
+        try {
+            $lowerText = strtolower($text);
 
-        if (str_contains($lowerText, 'hello') || str_contains($lowerText, 'hi')) {
-            return "Hello! 👋 How can I help you today?";
+            if (str_contains($lowerText, 'hello') || str_contains($lowerText, 'hi')) {
+                return "Hello! 👋 How can I help you today?";
+            }
+
+            if (str_contains($lowerText, 'how are you')) {
+                return "I'm doing great! Thanks for asking! 🤖";
+            }
+
+            if (str_contains($lowerText, 'weather')) {
+                return "I don't know the weather right now, but I can check for you! ☀️";
+            }
+            return app(RagService::class)->answerFromDocuments($text);
+        } catch (\Throwable $e) {
+            \Log::error('RAG answer failed: '.$e->getMessage());
+            return "Sorry, I couldn't process your question right now.";
         }
-
-        if (str_contains($lowerText, 'how are you')) {
-            return "I'm doing great! Thanks for asking! 🤖";
-        }
-
-        if (str_contains($lowerText, 'weather')) {
-            return "I don't know the weather right now, but I can check for you! ☀️";
-        }
-
-        // Default response
-        return "I received your message: \"$text\"\n\nThis has been stored in our database! 📝";
     }
 
     private function getMessageCount($userId)
