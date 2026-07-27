@@ -3,7 +3,7 @@ namespace App\Services;
 
 use App\Models\DocumentChunk;
 use OpenAI\Laravel\Facades\OpenAI;
-
+use Illuminate\Support\Facades\Log;
 class VectorService
 {
     public function generateEmbedding(string $text): array
@@ -15,33 +15,6 @@ class VectorService
 
         return $response->embeddings[0]->embedding;
     }
-
-    // public function searchSimilarChunks(string $query, int $limit = 5): array
-    // {
-    //     // Generate embedding for query
-    //     $queryEmbedding = $this->generateEmbedding($query);
-
-    //     // Get all chunks from database
-    //     $chunks = DocumentChunk::with('document')->get();
-
-    //     // Calculate cosine similarity
-    //     $results = [];
-    //     foreach ($chunks as $chunk) {
-    //         $similarity = $this->cosineSimilarity($queryEmbedding, $chunk->embedding);
-    //         $results[] = [
-    //             'chunk' => $chunk,
-    //             'similarity' => $similarity,
-    //             'content' => $chunk->content
-    //         ];
-    //     }
-
-    //     // Sort by similarity and return top results
-    //     usort($results, function($a, $b) {
-    //         return $b['similarity'] <=> $a['similarity'];
-    //     });
-
-    //     return array_slice($results, 0, $limit);
-    // }
 
     protected function cosineSimilarity(array $vec1, array $vec2): float
     {
@@ -64,12 +37,15 @@ class VectorService
 
     public function searchSimilarChunks(string $query, int $limit = 5): array
     {
+        Log::info('Searching for similar chunks: ' . $query);
         $queryEmbedding = $this->generateEmbedding($query);
-        $hits = app(QdrantService::class)->search($queryEmbedding, $limit);
-
+        // Log::info('Query embedding: ' . json_encode($queryEmbedding));
+        $hits = app(QdrantService::class)->search($queryEmbedding, $limit);        
         $results = [];
         foreach ($hits as $hit) {
+            Log::info('Hit: ' . json_encode($hit['id']));
             $chunk = DocumentChunk::with('document')->find($hit['id']);
+            Log::info('Chunk: ' . json_encode($chunk));
             if (!$chunk) {
                 continue;
             }
