@@ -137,7 +137,7 @@ class ProcessDocumentJob implements ShouldQueue
 
             $document->extracted_text = $extractedText;
             $document->metadata = $metadata;
-            $document->status = 'completed';
+            $document->status = 'ready';
             $document->error_message = null;
             $document->save();
             $document->refresh();
