@@ -29,13 +29,20 @@ class DocumentController extends Controller
         return view('documents.index', compact('documents'));
     }
 
+
+    public function create()
+    {
+        $documents = Document::all();
+        return view('documents.create', compact('documents'));
+    }
+
     public function upload(Request $request)
     {
         try {
             // Validate request
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
-                'file' => 'required|file|max:102400|mimes:pdf,jpg,jpeg,png,gif,bmp,docx,txt,csv,log,md,json,xml',
+                'file' => 'required|file|max:102400|mimes:pdf,txt',
             ]);
 
             if ($validator->fails()) {
