@@ -60,7 +60,7 @@ class RagService
                         self::NO_DOCUMENT_ANSWER.' '.
                         'Do not invent facts. Be concise. Treat synonym/paraphrase questions as the same intent. '.
                         'When an answer is supported, always use this exact format: '.
-                        "<answer>\nSource: <document name>. ".
+                        "answer\nSource: <document name>. ".
                         'Use the document name shown in parentheses in the context, without adding or changing it. '.
                         'Do not include a Source line when using the exact fallback response.',
                 ],
