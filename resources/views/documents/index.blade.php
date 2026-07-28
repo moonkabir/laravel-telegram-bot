@@ -1,65 +1,6 @@
-{{-- resources/views/documents/index.blade.php --}}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>Document Management</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-</head>
-<body class="bg-gray-50">
+@extends('layouts.admin')
+@section('content')
     <div class="max-w-6xl mx-auto px-4 py-8">
-        <!-- Header -->
-        <div class="flex justify-between items-center mb-6">
-            <div>
-                <h1 class="text-2xl font-bold text-gray-800">
-                    <i class="fas fa-folder-open text-blue-500"></i> Document Management
-                </h1>
-                <p class="text-sm text-gray-500">Upload and manage your documents with AI-powered OCR</p>
-            </div>
-            <div class="flex space-x-2">
-                <span class="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm">
-                    <i class="fas fa-file-alt"></i> {{ $documents->total() ?? 0 }} Documents
-                </span>
-            </div>
-        </div>
-
-        <!-- Upload Form -->
-        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h2 class="text-lg font-semibold mb-4">
-                <i class="fas fa-upload text-blue-500"></i> Upload Document
-            </h2>
-            <form id="uploadForm" class="space-y-4">
-                @csrf
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Document Name</label>
-                    <input type="text" name="name" id="docName" required
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                           placeholder="Enter document name">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Select File</label>
-                    <input type="file" name="file" id="docFile"
-                           accept=".pdf,.jpg,.jpeg,.png,.gif,.bmp,.docx,.txt" required
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg file:mr-4 file:py-2 file:px-4 file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-                    <p class="text-xs text-gray-500 mt-1">Supported: PDF, Images (JPG, PNG, GIF, BMP), DOCX, TXT (Max 20MB)</p>
-                </div>
-                <button type="submit" id="uploadBtn"
-                        class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition disabled:opacity-50">
-                    <i class="fas fa-upload"></i> Upload & Process with AI
-                </button>
-            </form>
-            <div id="uploadStatus" class="mt-4 hidden"></div>
-            <div id="uploadProgress" class="mt-4 hidden">
-                <div class="w-full bg-gray-200 rounded-full h-2.5">
-                    <div id="progressBar" class="bg-blue-500 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
-                </div>
-                <p id="progressText" class="text-xs text-gray-500 mt-1">Processing...</p>
-            </div>
-        </div>
-
         <!-- Search -->
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
             <div class="flex flex-col md:flex-row gap-4">
@@ -78,13 +19,17 @@
                 </div>
             </div>
         </div>
-
         <!-- Document List -->
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-semibold">Uploaded Documents</h2>
-                <span class="text-sm text-gray-500">{{ $documents->count() }} documents</span>
-            </div>
+                <div>
+                    <h2 class="text-lg font-semibold mb-2">Uploaded Policies</h2>
+                    <span class="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm">{{ $documents->count() }} policies</span>
+                </div>
+                <a href="{{ route('documents.create') }}" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+                    <i class="fas fa-plus"></i> Upload
+                </a>
+            </div>            
             <div id="documentList" class="space-y-3">
                 @forelse($documents as $doc)
                     <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition">
@@ -99,10 +44,10 @@
                                     <span>•</span>
                                     <span>{{ $doc->formatted_size }}</span>
                                     <span>•</span>
-                                    <span>{{ $doc->created_at->diffForHumans() }}</span>
+                                    <span>{{ $doc->created_at->format('d-M-Y') }}</span>
                                     <span>•</span>
                                     <span id="doc-{{ $doc->id }}-status" class="px-2 py-0.5 rounded-full text-xs font-medium
-                                        {{ $doc->status === 'completed' ? 'bg-green-100 text-green-700' : '' }}
+                                        {{ $doc->status === 'ready' ? 'bg-green-100 text-green-700' : '' }}
                                         {{ $doc->status === 'processing' ? 'bg-blue-100 text-blue-700 animate-pulse' : '' }}
                                         {{ $doc->status === 'pending' ? 'bg-yellow-100 text-yellow-700' : '' }}
                                         {{ $doc->status === 'failed' ? 'bg-red-100 text-red-700' : '' }}
@@ -113,7 +58,7 @@
                             </div>
                         </div>
                         <div class="flex items-center space-x-2">
-                            @if($doc->status === 'completed')
+                            @if($doc->status === 'ready')
                                 <button onclick="viewDocument({{ $doc->id }})"
                                         class="text-blue-500 hover:text-blue-700 transition px-2 py-1 rounded hover:bg-blue-50">
                                     <i class="fas fa-eye"></i>
@@ -128,8 +73,8 @@
                 @empty
                     <div class="text-center text-gray-400 py-8">
                         <i class="fas fa-file-circle-plus text-3xl block mb-2"></i>
-                        <p>No documents uploaded yet</p>
-                        <p class="text-xs mt-1">Upload your first document above</p>
+                        <p>No policies uploaded yet</p>
+                        <p class="text-xs mt-1">Upload your first policy above</p>
                     </div>
                 @endforelse
             </div>
@@ -174,7 +119,8 @@
             </div>
         </div>
     </div>
-
+@endsection
+@section('scripts')
     <script>
 
         // Delete document
@@ -428,5 +374,4 @@
             }
         });
     </script>
-</body>
-</html>
+@endsection
