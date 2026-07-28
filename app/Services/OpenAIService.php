@@ -393,7 +393,7 @@ class OpenAIService
 
             Log::info('Run status: ' . $run->status . ' (attempt ' . ($attempts + 1) . '/' . $maxAttempts . ')');
 
-            if ($run->status === 'completed') {
+            if ($run->status === 'ready') {
                 return $run;
             }
 
