@@ -40,7 +40,7 @@
                             <div class="flex-1 min-w-0">
                                 <p class="font-medium text-gray-800">{{ $doc->name }}</p>
                                 <div class="flex items-center space-x-2 text-xs text-gray-500">
-                                    <span>{{ ($doc->metadata['input_type'] ?? $doc->file_type) === 'text' ? 'Text' : ($doc->file_type == 'pdf' ? 'PDF' : 'TXT') }}</span>
+                                    <span>{{ ($doc->metadata['input_type'] ?? $doc->file_type) === 'text' ? 'Text' : 'PDF' }}</span>
                                     <span>•</span>
                                     <span>{{ $doc->formatted_size }}</span>
                                     <span>•</span>

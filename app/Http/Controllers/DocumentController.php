@@ -42,7 +42,7 @@ class DocumentController extends Controller
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
                 'input_type' => 'required|in:pdf,text',
-                'file' => 'nullable|required_if:input_type,pdf|file|max:10240|mimes:pdf,txt',
+                'file' => 'nullable|required_if:input_type,pdf|file|max:10240|mimes:pdf',
                 'content' => 'nullable|required_if:input_type,text|string|min:10|max:50000',
             ]);
 
@@ -56,7 +56,7 @@ class DocumentController extends Controller
             if ($request->input_type === 'pdf') {
                 $file = $request->file('file');
                 $path = $file->store('documents', 'public');
-                $fileType = $file->getClientOriginalExtension();
+                $fileType = 'PDF';
                 $fileSize = $file->getSize();
                 $originalName = $file->getClientOriginalName();
                 $mimeType = $file->getMimeType();
