@@ -119,13 +119,42 @@ class TelegramWebhookController extends Controller
 
     private function handleRegularMessage($text, $chatId, $userId)
     {
+        $loadingMessage = null;
+
+        try {
+            Telegram::sendChatAction([
+                'chat_id' => $chatId,
+                'action' => 'typing',
+            ]);
+
+            $loadingMessage = Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => 'Preparing a response...',
+            ]);
+        } catch (\Throwable $e) {
+            \Log::warning('Failed to send Telegram loading message: '.$e->getMessage());
+        }
+
         try {
             // Greetings/basic chat → OpenAI; other questions → uploaded documents (RAG).
-            return app(RagService::class)->answer($text);
+            $response = app(RagService::class)->answer($text);
         } catch (\Throwable $e) {
             \Log::error('RAG answer failed: '.$e->getMessage());
-            return "Sorry, I couldn't process your question right now.";
+            $response = "Sorry, I couldn't process your question right now.";
         }
+
+        if ($loadingMessage) {
+            try {
+                Telegram::deleteMessage([
+                    'chat_id' => $chatId,
+                    'message_id' => $loadingMessage->getMessageId(),
+                ]);
+            } catch (\Throwable $e) {
+                \Log::warning('Failed to remove Telegram loading message: '.$e->getMessage());
+            }
+        }
+
+        return $response;
     }
 
     private function getMessageCount($userId)
