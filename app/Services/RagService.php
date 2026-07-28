@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Log;
 
 class RagService
 {
-    private const NO_DOCUMENT_ANSWER = "I couldn't find relevant information in the uploaded documents.";
+    private const NO_DOCUMENT_ANSWER = "I could not find this information in the available HR policies. Please contact HR for clarification.";
 
     public function __construct(
         private VectorService $vectorService,
