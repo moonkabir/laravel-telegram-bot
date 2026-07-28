@@ -40,7 +40,7 @@
                             <div class="flex-1 min-w-0">
                                 <p class="font-medium text-gray-800">{{ $doc->name }}</p>
                                 <div class="flex items-center space-x-2 text-xs text-gray-500">
-                                    <span>{{ $doc->file_type }}</span>
+                                    <span>{{ ($doc->metadata['input_type'] ?? $doc->file_type) === 'text' ? 'Text' : ($doc->file_type == 'pdf' ? 'PDF' : 'TXT') }}</span>
                                     <span>•</span>
                                     <span>{{ $doc->formatted_size }}</span>
                                     <span>•</span>
@@ -316,17 +316,16 @@
                         if (statusBadge) {
                             statusBadge.textContent = data.status;
                             statusBadge.className = `px-2 py-0.5 rounded-full text-xs font-medium
-                                ${data.status === 'completed' ? 'bg-green-100 text-green-700' : ''}
+                                ${data.status === 'ready' ? 'bg-green-100 text-green-700' : ''}
                                 ${data.status === 'processing' ? 'bg-blue-100 text-blue-700 animate-pulse' : ''}
                                 ${data.status === 'pending' ? 'bg-yellow-100 text-yellow-700' : ''}
                                 ${data.status === 'failed' ? 'bg-red-100 text-red-700' : ''}
                             `;
                         }
 
-                        // If completed or failed, stop polling
-                        if (data.status === 'completed' || data.status === 'failed') {
+                        if (data.status === 'ready' || data.status === 'failed') {
                             clearInterval(interval);
-                            if (data.status === 'completed') {
+                            if (data.status === 'ready') {
                                 setTimeout(() => location.reload(), 2000);
                             }
                         }
@@ -337,41 +336,10 @@
             }, 3000);
         }
 
-        // After successful upload, start polling
-        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-
-            const formData = new FormData(this);
-            const status = document.getElementById('uploadStatus');
-            const btn = document.getElementById('uploadBtn');
-
-            status.className = 'mt-4 p-3 rounded-lg bg-blue-50 text-blue-700';
-            status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading and queuing for processing...';
-            status.classList.remove('hidden');
-            btn.disabled = true;
-
-            try {
-                const response = await fetch('{{ route("documents.upload") }}', {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
-                    },
-                    body: formData
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    window.location.reload(); // Reload to show the new document in the list
-                } else {
-                    throw new Error(data.error || 'Upload failed');
-                }
-            } catch (error) {
-                status.className = 'mt-4 p-3 rounded-lg bg-red-50 text-red-700';
-                status.innerHTML = '<i class="fas fa-exclamation-circle"></i> ' + error.message;
-            } finally {
-                btn.disabled = false;
-            }
-        });
+        @foreach($documents as $doc)
+            @if(in_array($doc->status, ['pending', 'processing']))
+                checkDocumentStatus({{ $doc->id }});
+            @endif
+        @endforeach
     </script>
 @endsection
