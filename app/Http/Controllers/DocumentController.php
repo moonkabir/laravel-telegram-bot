@@ -2,15 +2,13 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Document;
 use App\Jobs\ProcessDocumentJob;
+use App\Models\Document;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Bus\Batch;
-use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Str;
 
 class DocumentController extends Controller
 {
@@ -22,46 +20,67 @@ class DocumentController extends Controller
                 ->paginate(10);
 
         } catch (\Exception $e) {
-            Log::error('Failed to fetch documents: ' . $e->getMessage());
+            Log::error('Failed to fetch documents: '.$e->getMessage());
             $documents = collect([]);
         }
 
         return view('documents.index', compact('documents'));
     }
 
+    public function create()
+    {
+        $documents = Document::all();
+
+        return view('documents.create', compact('documents'));
+    }
+
     public function upload(Request $request)
     {
+        $path = null;
+
         try {
-            // Validate request
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
-                'file' => 'required|file|max:102400|mimes:pdf,jpg,jpeg,png,gif,bmp,docx,txt,csv,log,md,json,xml',
+                'input_type' => 'required|in:pdf,text',
+                'file' => 'nullable|required_if:input_type,pdf|file|max:10240|mimes:pdf',
+                'content' => 'nullable|required_if:input_type,text|string|min:10|max:50000',
             ]);
 
             if ($validator->fails()) {
                 return response()->json([
                     'success' => false,
-                    'error' => $validator->errors()->first()
+                    'error' => $validator->errors()->first(),
                 ], 422);
             }
 
-            // Upload file
-            $file = $request->file('file');
-            $filename = time() . '_' . $file->getClientOriginalName();
-            $path = $file->store('documents', 'public');
+            if ($request->input_type === 'pdf') {
+                $file = $request->file('file');
+                $path = $file->store('documents', 'public');
+                $fileType = $file->getClientOriginalExtension();
+                $fileSize = $file->getSize();
+                $originalName = $file->getClientOriginalName();
+                $mimeType = $file->getMimeType();
+            } else {
+                $content = trim((string) $request->content);
+                $path = 'documents/'.Str::uuid().'.txt';
 
-            if (!$path) {
+                if (! Storage::disk('public')->put($path, $content)) {
+                    $path = null;
+                }
+
+                $fileType = 'txt';
+                $fileSize = strlen($content);
+                $originalName = null;
+                $mimeType = 'text/plain';
+            }
+
+            if ($path === null) {
                 return response()->json([
                     'success' => false,
-                    'error' => 'Failed to upload file'
+                    'error' => 'Failed to save policy content',
                 ], 500);
             }
 
-            // Get file info
-            $fileType = $file->getClientOriginalExtension();
-            $fileSize = $file->getSize();
-
-            // Create document record with pending status
             $document = Document::create([
                 'name' => $request->name,
                 'file_path' => $path,
@@ -69,13 +88,13 @@ class DocumentController extends Controller
                 'file_size' => $fileSize,
                 'status' => 'pending',
                 'metadata' => [
-                    'original_name' => $file->getClientOriginalName(),
-                    'mime_type' => $file->getMimeType(),
+                    'input_type' => $request->input_type,
+                    'original_name' => $originalName,
+                    'mime_type' => $mimeType,
                     'uploaded_at' => now()->toDateTimeString(),
                 ],
             ]);
 
-            // ✅ Dispatch job for processing
             ProcessDocumentJob::dispatch($document->id, $path, $fileType);
 
             Log::info('Document queued for processing', ['document_id' => $document->id]);
@@ -85,16 +104,21 @@ class DocumentController extends Controller
                 'message' => 'Document uploaded successfully! Processing in background.',
                 'document_id' => $document->id,
                 'name' => $request->name,
-                'status' => 'pending'
+                'input_type' => $request->input_type,
+                'status' => 'pending',
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Document upload error: ' . $e->getMessage());
-            Log::error('Trace: ' . $e->getTraceAsString());
+            if ($path && Storage::disk('public')->exists($path)) {
+                Storage::disk('public')->delete($path);
+            }
+
+            Log::error('Document upload error: '.$e->getMessage());
+            Log::error('Trace: '.$e->getTraceAsString());
 
             return response()->json([
                 'success' => false,
-                'error' => 'Failed to upload document: ' . $e->getMessage()
+                'error' => 'Failed to upload document: '.$e->getMessage(),
             ], 500);
         }
     }
@@ -110,13 +134,13 @@ class DocumentController extends Controller
                 'message' => $document->error_message ?? null,
                 'metadata' => $document->metadata,
                 'text_length' => $document->extracted_text ? strlen($document->extracted_text) : 0,
-                'chunks_count' => $document->chunks()->count()
+                'chunks_count' => $document->chunks()->count(),
             ]);
 
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Document not found'
+                'error' => 'Document not found',
             ], 404);
         }
     }
@@ -149,10 +173,11 @@ class DocumentController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Search error: ' . $e->getMessage());
+            Log::error('Search error: '.$e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'error' => 'Search failed: ' . $e->getMessage()
+                'error' => 'Search failed: '.$e->getMessage(),
             ], 500);
         }
     }
@@ -170,14 +195,15 @@ class DocumentController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Document deleted successfully'
+                'message' => 'Document deleted successfully',
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Document deletion error: ' . $e->getMessage());
+            Log::error('Document deletion error: '.$e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'error' => 'Failed to delete document: ' . $e->getMessage()
+                'error' => 'Failed to delete document: '.$e->getMessage(),
             ], 500);
         }
     }
@@ -197,7 +223,7 @@ class DocumentController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Document not found'
+                'error' => 'Document not found',
             ], 404);
         }
     }

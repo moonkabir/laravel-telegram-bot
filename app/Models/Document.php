@@ -38,7 +38,7 @@ class Document extends Model
     public function scopeSearch($query, $searchTerm)
     {
         return $query->where('name', 'LIKE', "%{$searchTerm}%")
-                     ->orWhere('extracted_text', 'LIKE', "%{$searchTerm}%");
+            ->orWhere('extracted_text', 'LIKE', "%{$searchTerm}%");
     }
 
     /**
@@ -56,6 +56,7 @@ class Document extends Model
             'gif' => 'fa-file-image text-green-500',
             'bmp' => 'fa-file-image text-green-500',
             'txt' => 'fa-file-lines text-gray-500',
+            'text' => 'fa-file-lines text-gray-500',
             'xls' => 'fa-file-excel text-green-600',
             'xlsx' => 'fa-file-excel text-green-600',
             'ppt' => 'fa-file-powerpoint text-orange-500',
@@ -63,6 +64,7 @@ class Document extends Model
         ];
 
         $type = strtolower($this->file_type);
+
         return $icons[$type] ?? 'fa-file text-gray-400';
     }
 
@@ -78,6 +80,6 @@ class Document extends Model
             $bytes /= 1024;
         }
 
-        return round($bytes, 2) . ' ' . $units[$i];
+        return round($bytes, 2).' '.$units[$i];
     }
 }

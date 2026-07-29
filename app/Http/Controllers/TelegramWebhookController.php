@@ -24,11 +24,15 @@ class TelegramWebhookController extends Controller
             $message = $update->getMessage();
 
             if ($message) {
+                $loadingMessage = $this->sendLoadingMessage($message);
+
                 // Store the message in database
                 $storedMessage = $this->storeMessage($update, $message);
 
                 // Process the message and get response
                 $response = $this->processMessage($message);
+
+                $this->removeLoadingMessage($loadingMessage, $message->getChat()->getId());
 
                 // Update the stored message with bot response
                 if ($storedMessage && $response) {
@@ -105,6 +109,42 @@ class TelegramWebhookController extends Controller
         }
 
         return null;
+    }
+
+    private function sendLoadingMessage($message)
+    {
+        $text = $message->getText();
+
+        if (!$text || str_starts_with($text, '/')) {
+            return null;
+        }
+
+        try {
+            return Telegram::sendMessage([
+                'chat_id' => $message->getChat()->getId(),
+                'text' => 'Preparing a response...',
+            ]);
+        } catch (\Throwable $e) {
+            \Log::warning('Failed to send Telegram loading message: '.$e->getMessage());
+
+            return null;
+        }
+    }
+
+    private function removeLoadingMessage($loadingMessage, $chatId)
+    {
+        if (!$loadingMessage) {
+            return;
+        }
+
+        try {
+            Telegram::deleteMessage([
+                'chat_id' => $chatId,
+                'message_id' => $loadingMessage->getMessageId(),
+            ]);
+        } catch (\Throwable $e) {
+            \Log::warning('Failed to remove Telegram loading message: '.$e->getMessage());
+        }
     }
 
     private function handleCommand($text, $chatId, $userId)

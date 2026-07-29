@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Log;
 
 class RagService
 {
-    private const NO_DOCUMENT_ANSWER = "I couldn't find relevant information in the uploaded documents.";
+    private const NO_DOCUMENT_ANSWER = "I could not find this information in the available HR policies. Please contact HR for clarification.";
 
     public function __construct(
         private VectorService $vectorService,
@@ -58,7 +58,11 @@ class RagService
                         'Answer ONLY using the provided document context. '.
                         'If the answer is not clearly supported by the context, reply with exactly: '.
                         self::NO_DOCUMENT_ANSWER.' '.
-                        'Do not invent facts. Be concise. Treat synonym/paraphrase questions as the same intent.',
+                        'Do not invent facts. Be concise. Treat synonym/paraphrase questions as the same intent. '.
+                        'When an answer is supported, always use this exact format: '.
+                        "answer\nSource: <document name>. ".
+                        'Use the document name shown in parentheses in the context, without adding or changing it. '.
+                        'Do not include a Source line when using the exact fallback response.',
                 ],
                 [
                     'role' => 'user',
