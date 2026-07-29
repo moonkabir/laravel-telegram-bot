@@ -5,11 +5,11 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DocumentController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/login', [AuthenticatedSessionController::class, 'create'])
+Route::get('/', [AuthenticatedSessionController::class, 'create'])
     ->middleware('guest')
     ->name('login');
 
-Route::post('/login', [AuthenticatedSessionController::class, 'store'])
+Route::post('/', [AuthenticatedSessionController::class, 'store'])
     ->middleware(['guest', 'throttle:5,1']);
 
 Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])

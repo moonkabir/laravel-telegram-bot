@@ -56,7 +56,7 @@ class DocumentController extends Controller
             if ($request->input_type === 'pdf') {
                 $file = $request->file('file');
                 $path = $file->store('documents', 'public');
-                $fileType = 'PDF';
+                $fileType = $file->getClientOriginalExtension();
                 $fileSize = $file->getSize();
                 $originalName = $file->getClientOriginalName();
                 $mimeType = $file->getMimeType();
